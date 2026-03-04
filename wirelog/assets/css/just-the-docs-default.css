@@ -248,6 +248,69 @@ table tr:hover td {
   background-color: rgba(112, 169, 161, 0.1);
 }
 
+.highlight {
+  background-color: rgba(26, 45, 43, 0.8);
+  border-left: 4px solid #70A9A1;
+  padding: 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.highlight code {
+  color: #f3f4f4;
+}
+.highlight .k, .highlight .kd, .highlight .kn {
+  color: #0693e3;
+  font-weight: 600;
+}
+.highlight .s, .highlight .sa, .highlight .sb, .highlight .sc, .highlight .sd, .highlight .s1, .highlight .s2 {
+  color: #00d084;
+}
+.highlight .se {
+  color: #9b51e0;
+  font-weight: 500;
+}
+.highlight .m, .highlight .mb, .highlight .mf, .highlight .mh, .highlight .mi, .highlight .mo, .highlight .il {
+  color: #0693e3;
+  font-weight: 500;
+}
+.highlight .nv, .highlight .nl {
+  color: #00d084;
+  font-weight: 500;
+}
+.highlight .nf, .highlight .na {
+  color: #70A9A1;
+}
+.highlight .o, .highlight .ow {
+  color: #9b51e0;
+  font-weight: 600;
+}
+.highlight .p, .highlight .pi {
+  color: #f3f4f4;
+}
+.highlight .c, .highlight .ca, .highlight .cm, .highlight .cp, .highlight .c1 {
+  color: #888888;
+  font-style: italic;
+}
+.highlight .w {
+  color: #f3f4f4;
+}
+.highlight .lineno {
+  color: #666666;
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 0 0.5rem;
+  margin-right: 0.5rem;
+  border-right: 1px solid #70A9A1;
+}
+
+code.language-datalog,
+code.language-dl {
+  background-color: rgba(112, 169, 161, 0.1);
+  color: #00d084;
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: "Courier New", monospace;
+}
+
 /*! normalize.css v8.0.1 | MIT License | github.com/necolas/normalize.css */
 /* Document
    ========================================================================== */
