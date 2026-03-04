@@ -222,6 +222,32 @@ Licensed under the BSD license, see LICENSE for details.
 .highlight .il {
   color: #953800;
 } /* Literal.Number.Integer.Long */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+table th {
+  background-color: #70A9A1;
+  color: #1a2d2b;
+  font-weight: 600;
+  padding: 0.75rem;
+  text-align: left;
+  border: 1px solid #70A9A1;
+}
+table td {
+  padding: 0.75rem;
+  border: 1px solid rgba(112, 169, 161, 0.3);
+  background-color: rgba(35, 59, 56, 0.5);
+  color: #f3f4f4;
+}
+table tr:nth-child(even) td {
+  background-color: rgba(26, 45, 43, 0.5);
+}
+table tr:hover td {
+  background-color: rgba(112, 169, 161, 0.1);
+}
+
 /*! normalize.css v8.0.1 | MIT License | github.com/necolas/normalize.css */
 /* Document
    ========================================================================== */
