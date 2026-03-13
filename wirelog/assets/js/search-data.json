@@ -1,557 +1,627 @@
 {"0": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Use Case: Real-Time Access Control Auditing with Delta Queries",
+    "content": "This use case shows how to embed wirelog in an access gateway to produce a continuous audit trail of permission changes. The key insight is that delta queries let the gateway emit only what changed — new grants and revocations — without rescanning the entire permission set on every policy update. ",
+    "url": "/wirelog/user-guide/access-control-audit/#use-case-real-time-access-control-auditing-with-delta-queries",
+    
+    "relUrl": "/user-guide/access-control-audit/#use-case-real-time-access-control-auditing-with-delta-queries"
+  },"1": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Scenario",
+    "content": "Consider a cloud platform whose access gateway controls which users can perform which actions on which resources. Role assignments arrive from a network policy service as a stream of events: a user joins a team, a team gains a new capability, a contractor loses access when a project ends. For compliance purposes every change must appear in the audit log within milliseconds of the policy update. The traditional approach — re-running a full SQL query after each update and diffing the result against the previous snapshot — is expensive and error-prone. wirelog solves this natively: the Datalog engine tracks the internal state and, when new facts are inserted or retracted, emits exactly the derived tuples that changed. No snapshot diffing required. The example below is self-contained. You can copy the .dl file, the five CSV data files, and the C program into a directory, compile with libwirelog, and run it. ",
+    "url": "/wirelog/user-guide/access-control-audit/#scenario",
+    
+    "relUrl": "/user-guide/access-control-audit/#scenario"
+  },"2": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Datalog Rules",
+    "content": "Save the following as rbac.dl. # ── Base relations (loaded from CSV) ───────────────────────────────────────── .decl role(name: string) .decl user(name: string) .decl permission(name: string) .decl role_membership(user: string, role: string) .decl role_permission(role: string, permission: string) .input role(filename=\"roles.csv\", delimiter=\",\") .input user(filename=\"users.csv\", delimiter=\",\") .input permission(filename=\"permissions.csv\", delimiter=\",\") .input role_membership(filename=\"role_membership.csv\", delimiter=\",\") .input role_permission(filename=\"role_permission.csv\", delimiter=\",\") # ── Derived relation ────────────────────────────────────────────────────────── # Effective permissions: join role membership with role permissions. # This is non-recursive, so it is safe to register a delta callback on it.decl user_permission(user: string, permission: string) user_permission(u, p) :- role_membership(u, r), role_permission(r, p).output user_permission . The join role_membership(u, r), role_permission(r, p) propagates permissions transitively through roles. Because the rule is non-recursive, wirelog can track its delta directly — a requirement of the current embedding API. ",
+    "url": "/wirelog/user-guide/access-control-audit/#datalog-rules",
+    
+    "relUrl": "/user-guide/access-control-audit/#datalog-rules"
+  },"3": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Sample Data",
+    "content": "Create the following five CSV files alongside rbac.dl. roles.csv . name admin editor viewer auditor . permissions.csv . name read_logs write_config read_reports delete_data . role_permission.csv . role,permission admin,read_logs admin,write_config admin,delete_data editor,write_config editor,read_reports viewer,read_reports auditor,read_logs . users.csv . name Alice Bob Carol Dave . role_membership.csv — initial state (Dave is not yet assigned) . user,role Alice,admin Bob,editor Carol,viewer . ",
+    "url": "/wirelog/user-guide/access-control-audit/#sample-data",
+    
+    "relUrl": "/user-guide/access-control-audit/#sample-data"
+  },"4": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "C Embedding",
+    "content": "Save the following as audit_gateway.c and link against libwirelog. #include &lt;wirelog/session.h&gt; #include &lt;stdio.h&gt; /* * Delta callback — called once per changed tuple after each wl_session_run() * or wl_session_step() call. * * Parameters: * relation — name of the output relation that changed * tuple — array of column values; length is arity * arity — number of columns * polarity — +1 for a newly derived tuple, -1 for a retracted tuple * userdata — opaque pointer passed at registration (unused here) */ static void on_permission_delta(const char *relation, const wl_val *tuple, int arity, int polarity, void *userdata) { (void)relation; /* we registered on \"user_permission\" specifically */ (void)arity; /* always 2: user, permission */ (void)userdata; /* Both columns are strings. wl_val.s points into wirelog's intern table — * valid for the session lifetime; do not free. */ const char *user = tuple[0].s; const char *perm = tuple[1].s; if (polarity &gt; 0) { printf(\"[AUDIT] GRANT user=%-8s permission=%s\\n\", user, perm); } else { printf(\"[AUDIT] REVOKE user=%-8s permission=%s\\n\", user, perm); } } int main(void) { /* 1. Create a session from the Datalog file. * The second argument is the worker count for the columnar backend. * Use 1 for single-threaded embedded operation. */ wl_session *session = wl_session_create(\"rbac.dl\", /*workers=*/1); if (!session) { fprintf(stderr, \"Failed to create wirelog session\\n\"); return 1; } /* 2. Register the delta callback on the \"user_permission\" output relation. * Must be called before wl_session_run(). */ wl_session_set_delta_cb(session, \"user_permission\", on_permission_delta, NULL); /* 3. Initial evaluation — fires the callback for every permission that * holds in the initial dataset. */ printf(\"=== Initial permissions (from CSV) ===\\n\"); wl_session_run(session); /* 4. Incremental update: Dave joins the admin role. * wl_session_insert_incremental() adds a fact without discarding the * current session state. The next step re-evaluates only what changed. */ printf(\"\\n[EVENT] Dave added to admin role\\n\\n\"); wl_session_insert_incremental(session, \"role_membership\", (const char *[]){\"Dave\", \"admin\"}, 2); wl_session_run(session); /* 5. Incremental update: Alice leaves the admin role (access revocation). */ printf(\"\\n[EVENT] Alice removed from admin role\\n\\n\"); wl_session_retract(session, \"role_membership\", (const char *[]){\"Alice\", \"admin\"}, 2); wl_session_run(session); /* 6. Cleanup. */ wl_session_destroy(session); return 0; } . Compile: . gcc -o audit_gateway audit_gateway.c -lwirelog . ",
+    "url": "/wirelog/user-guide/access-control-audit/#c-embedding",
+    
+    "relUrl": "/user-guide/access-control-audit/#c-embedding"
+  },"5": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Expected Output",
+    "content": "=== Initial permissions (from CSV) === [AUDIT] GRANT user=Alice permission=delete_data [AUDIT] GRANT user=Alice permission=read_logs [AUDIT] GRANT user=Alice permission=write_config [AUDIT] GRANT user=Bob permission=read_reports [AUDIT] GRANT user=Bob permission=write_config [AUDIT] GRANT user=Carol permission=read_reports [EVENT] Dave added to admin role [AUDIT] GRANT user=Dave permission=delete_data [AUDIT] GRANT user=Dave permission=read_logs [AUDIT] GRANT user=Dave permission=write_config [EVENT] Alice removed from admin role [AUDIT] REVOKE user=Alice permission=delete_data [AUDIT] REVOKE user=Alice permission=read_logs [AUDIT] REVOKE user=Alice permission=write_config . Only the affected tuples appear in each step. Alice’s pre-existing permissions are not re-emitted when Dave is added; Dave’s permissions are not re-emitted when Alice is removed. This is the core value of delta queries: output is proportional to the size of the change, not the size of the total permission set. ",
+    "url": "/wirelog/user-guide/access-control-audit/#expected-output",
+    
+    "relUrl": "/user-guide/access-control-audit/#expected-output"
+  },"6": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "How It Works",
+    "content": "Why RBAC benefits from delta queries . In a traditional SQL access gateway you would compute the permission diff with a pair of queries — a LEFT JOIN … EXCEPT — and compare them against a cached snapshot on every policy event. The snapshot must be stored, kept consistent under concurrent updates, and invalidated when role definitions change. This is fragile and scales poorly when the number of users or roles grows. wirelog models permissions as a Datalog join and tracks the delta internally. The engine maintains a (data, time, diff) columnar representation — the same structure that underlies the +/- prefixed output in the examples above. When a fact is inserted or retracted, only the rules that transitively depend on that fact are re-evaluated, and only the changed output tuples are delivered to the callback. The application sees a clean stream of (user, permission, polarity) events with no snapshot management required. String interning . CSV files and inline Datalog facts contain human-readable strings. wirelog internalizes every distinct string value once and represents it as a pointer into a session-scoped string table. The wl_val.s field in the delta callback is one such pointer — it is valid for the lifetime of the session and must not be freed or stored beyond session teardown. Interning means that string comparisons inside the Datalog engine reduce to pointer equality, keeping joins fast even with large string vocabularies. Scaling to multiple workers . The call wl_session_create(\"rbac.dl\", /*workers=*/1) creates a single-threaded session, appropriate for an embedded gateway process where wirelog runs alongside other components. Increase the worker count to match available cores for workloads with larger fact sets or more complex rule graphs: . wl_session *session = wl_session_create(\"rbac.dl\", /*workers=*/4); . Results are identical regardless of worker count; only throughput changes. Embedding in real systems . This pattern maps directly onto production access gateway architectures. The policy service pushes role membership updates as a stream of insert and retract operations. The gateway calls wl_session_insert_incremental() or wl_session_retract() for each event, then wl_session_run() to advance the fixed point. The delta callback delivers grant and revocation events to the audit log writer, the metrics system, or a downstream alerting service — whichever consumers are registered. Because wirelog’s C API is C11 with no runtime dependencies beyond the standard library, it embeds cleanly into existing gateway processes written in C, C++, or Rust (via FFI), without requiring a separate sidecar or query service. ",
+    "url": "/wirelog/user-guide/access-control-audit/#how-it-works",
+    
+    "relUrl": "/user-guide/access-control-audit/#how-it-works"
+  },"7": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Key API Reference",
+    "content": "| Function | Description | . | wl_session_create(file, workers) | Parse file, optimize the Datalog program, allocate a session with workers threads | . | wl_session_set_delta_cb(s, rel, cb, ud) | Register cb to receive delta events for relation rel; call before wl_session_run() | . | wl_session_run(s) | Evaluate the program to fixed point; fires registered callbacks for each changed tuple | . | wl_session_insert_incremental(s, rel, vals, n) | Insert a new fact into rel (string columns, n values) without resetting session state | . | wl_session_retract(s, rel, vals, n) | Retract an existing fact from rel | . | wl_session_destroy(s) | Free all session resources | . For the full embedding API including wl_val types, aggregation delta semantics, and limitations of the current release, see Delta Queries. ",
+    "url": "/wirelog/user-guide/access-control-audit/#key-api-reference",
+    
+    "relUrl": "/user-guide/access-control-audit/#key-api-reference"
+  },"8": {
+    "doc": "Use Case: Access Control Auditing",
+    "title": "Use Case: Access Control Auditing",
+    "content": " ",
+    "url": "/wirelog/user-guide/access-control-audit/",
+    
+    "relUrl": "/user-guide/access-control-audit/"
+  },"9": {
     "doc": "CLI Usage",
     "title": "CLI Usage",
     "content": " ",
     "url": "/wirelog/user-guide/cli/",
     
     "relUrl": "/user-guide/cli/"
-  },"1": {
+  },"10": {
     "doc": "CLI Usage",
     "title": "Synopsis",
     "content": "wirelog-cli [options] &lt;file.dl&gt; . ",
     "url": "/wirelog/user-guide/cli/#synopsis",
     
     "relUrl": "/user-guide/cli/#synopsis"
-  },"2": {
+  },"11": {
     "doc": "CLI Usage",
     "title": "Options",
-    "content": "| Option | Argument | Default | Description | . | --workers | N | 1 | Number of worker threads (1-256) | . | --help, -h |   |   | Print usage and exit | . ",
+    "content": "| Option | Argument | Default | Description | . | --workers | N | 1 | Number of execution worker threads (1-256) | . | --help, -h |   |   | Print usage and exit | . The --delta and --watch flags are not available in the CLI. To use incremental updates and delta queries, use the embedded C API (wl_session_insert_incremental(), wl_session_set_delta_cb()). See Delta Queries. ",
     "url": "/wirelog/user-guide/cli/#options",
     
     "relUrl": "/user-guide/cli/#options"
-  },"3": {
+  },"12": {
     "doc": "CLI Usage",
     "title": "Basic Usage",
     "content": "# Run a Datalog program wirelog-cli program.dl # Run with 4 parallel workers wirelog-cli --workers 4 program.dl . ",
     "url": "/wirelog/user-guide/cli/#basic-usage",
     
     "relUrl": "/user-guide/cli/#basic-usage"
-  },"4": {
+  },"13": {
     "doc": "CLI Usage",
     "title": "Input File",
     "content": "The input must be a single .dl file containing a valid Datalog program. Multiple input files are not supported. A program can contain: . | Inline facts: edge(1, 2). | Rules: tc(x, y) :- edge(x, y). | Declarations: .decl edge(x: int32, y: int32) | Directives: .input, .output, .printsize | . ",
     "url": "/wirelog/user-guide/cli/#input-file",
     
     "relUrl": "/user-guide/cli/#input-file"
-  },"5": {
+  },"14": {
     "doc": "CLI Usage",
     "title": "CSV Data Loading",
     "content": "The .input directive loads data from CSV files: .decl edge(x: int32, y: int32) .input edge(filename=\"edges.csv\", delimiter=\",\") . | Parameter | Description | Default | . | filename | CSV file path (relative to current directory) | required | . | delimiter | Field separator character | , | . CSV format: . | One tuple per line | Fields separated by delimiter | Empty lines are skipped | Quoted strings are supported (quotes stripped) | Tab delimiter: delimiter=\"\\t\" | . ",
     "url": "/wirelog/user-guide/cli/#csv-data-loading",
     
     "relUrl": "/user-guide/cli/#csv-data-loading"
-  },"6": {
+  },"15": {
     "doc": "CLI Usage",
     "title": "Output Control",
     "content": "Default behavior . Without .output directives, all derived relations are printed. Selective output . With .output, only marked relations are printed: .output tc . Output format . Results are printed to stdout as tuples: . relation(value1, value2, ...) . Integer values print as decimal numbers. String values print with double quotes: . tc(1, 2) tc(\"Alice\", \"Bob\") . ",
     "url": "/wirelog/user-guide/cli/#output-control",
     
     "relUrl": "/user-guide/cli/#output-control"
-  },"7": {
+  },"16": {
     "doc": "CLI Usage",
     "title": "Exit Codes",
     "content": "| Code | Meaning | . | 0 | Success | . | 1 | Error (parse, execution, or argument error) | . ",
     "url": "/wirelog/user-guide/cli/#exit-codes",
     
     "relUrl": "/user-guide/cli/#exit-codes"
-  },"8": {
+  },"17": {
     "doc": "CLI Usage",
     "title": "Error Messages",
     "content": "Errors are printed to stderr with the error: prefix. | Message | Cause | . | no input file specified | No .dl file argument | . | cannot read file 'path' | File not found or unreadable | . | --workers requires an argument | Missing worker count | . | workers must be between 1 and 256 | Worker count out of range | . | unknown option 'name' | Unrecognized flag | . | multiple input files not supported | More than one .dl file | . | execution failed | Parse or execution error | . ",
     "url": "/wirelog/user-guide/cli/#error-messages",
     
     "relUrl": "/user-guide/cli/#error-messages"
-  },"9": {
+  },"18": {
     "doc": "CLI Usage",
     "title": "Pipeline",
-    "content": "The CLI executes these stages in order: . | Parse – source file to AST | Optimize – apply Fusion, JPP, SIP passes | Stratify – topological ordering via SCC detection | Generate Plan – IR to DD operator graph | Marshal – convert to FFI-safe format | Create Workers – instantiate DD worker threads | Load Facts – inline facts and CSV files | Execute – fixed-point computation | Output – print result tuples | . If any stage fails, execution stops with exit code 1. ",
+    "content": "The CLI executes these stages in order: . | Parse – source file to AST | Optimize – apply Fusion, JPP, SIP passes | Stratify – topological ordering via SCC detection | Generate Plan – IR to columnar execution plan | Create Workers – instantiate execution worker threads | Load Facts – inline facts and CSV files | Execute – fixed-point computation | Output – print result tuples | . If any stage fails, execution stops with exit code 1. ",
     "url": "/wirelog/user-guide/cli/#pipeline",
     
     "relUrl": "/user-guide/cli/#pipeline"
-  },"10": {
+  },"19": {
     "doc": "CLI Usage",
     "title": "Examples",
     "content": "# Simple program with inline facts wirelog-cli hello.dl # Large dataset with parallel workers wirelog-cli --workers 8 analysis.dl # Show help wirelog-cli --help . ",
     "url": "/wirelog/user-guide/cli/#examples",
     
     "relUrl": "/user-guide/cli/#examples"
-  },"11": {
+  },"20": {
     "doc": "Delta Queries",
     "title": "Delta Queries",
-    "content": "Delta queries expose the incremental changes to derived Datalog relations — which tuples were added or removed — without recomputing results from scratch. Instead of returning a full snapshot, a delta query emits only what changed between two evaluation states. wirelog is built on Differential Dataflow, which tracks changes natively as (data, time, diff) triples. Delta queries surface this internal machinery as a first-class feature. ",
+    "content": "Delta queries expose the incremental changes to derived Datalog relations — which tuples were added or removed — without recomputing results from scratch. Instead of returning a full snapshot, a delta query emits only what changed between two evaluation states. wirelog’s columnar backend natively tracks changes as (data, time, diff) triples, enabling efficient delta query processing. Unlike traditional SQL systems, this change tracking is fundamental to wirelog’s architecture. ",
     "url": "/wirelog/reference/delta-queries/",
     
     "relUrl": "/reference/delta-queries/"
-  },"12": {
+  },"21": {
     "doc": "Delta Queries",
     "title": "How Delta Queries Work",
     "content": "In conventional batch Datalog, you evaluate a program and get a complete result set. In delta mode, wirelog maintains an internal state and, when the input changes, emits only the differential — tuples entering or leaving each derived relation. Each delta is a signed change: . | Prefix | Meaning | . | + | Tuple newly derived in this evaluation step | . | - | Tuple retracted (no longer holds) | . Deletions propagate through rules automatically. If removing an edge fact causes a derived reach(1, 5) to no longer hold, wirelog emits - reach(1, 5) without any additional program annotations. ",
     "url": "/wirelog/reference/delta-queries/#how-delta-queries-work",
     
     "relUrl": "/reference/delta-queries/#how-delta-queries-work"
-  },"13": {
+  },"22": {
     "doc": "Delta Queries",
     "title": "wirelog vs RDFox",
-    "content": "Both wirelog and RDFox support incremental Datalog over changing data, but they differ in how delta queries are exposed. | Feature | wirelog | RDFox | . | Delta mechanism | C callback (wl_dd_session_set_delta_cb) + CLI flag | deltaquery command + SPARQL extensions | . | Change input | CLI: --delta + --watch; API: direct fact retraction/insertion | REST API or shell commands (import, delete) | . | Output format | +/- prefixed tuples to stdout or callback | SPARQL result sets with polarity annotations | . | Recursion support | Non-recursive rules (MVP) | Full recursive delta support | . | Aggregation deltas | Supported (non-recursive) | Supported | . | Language | Datalog (.dl) | Datalog+ / SPARQL | . | Embedding API | C11 (libwirelog) | Java / REST | . RDFox exposes delta queries through its shell command: . deltaquery SELECT ?x ?y WHERE { ?x :knows ?y } . wirelog exposes them through the --delta CLI flag and the wl_dd_session_set_delta_cb callback in the embedding API. ",
+    "content": "Both wirelog and RDFox support incremental Datalog over changing data, but they differ in how delta queries are exposed. | Feature | wirelog | RDFox | . | Delta mechanism | C callback (wl_session_set_delta_cb) + embedding API | deltaquery command + SPARQL extensions | . | Change input | API: wl_session_insert_incremental(), direct fact retraction/insertion | REST API or shell commands (import, delete) | . | Output format | +/- prefixed tuples to stdout or callback | SPARQL result sets with polarity annotations | . | Recursion support | Non-recursive rules (MVP) | Full recursive delta support | . | Aggregation deltas | Supported (non-recursive) | Supported | . | Language | Datalog (.dl) | Datalog+ / SPARQL | . | Embedding API | C11 (libwirelog) | Java / REST | . RDFox exposes delta queries through its shell command: . deltaquery SELECT ?x ?y WHERE { ?x :knows ?y } . wirelog exposes them through the wl_session_set_delta_cb callback in the embedding API. ",
     "url": "/wirelog/reference/delta-queries/#wirelog-vs-rdfox",
     
     "relUrl": "/reference/delta-queries/#wirelog-vs-rdfox"
-  },"14": {
+  },"23": {
     "doc": "Delta Queries",
-    "title": "CLI Usage",
-    "content": "Run a program and emit delta output for one or more relations: . wirelog-cli program.dl --delta reach . Watch a CSV file for changes and stream deltas as facts update: . wirelog-cli program.dl --delta reach --watch edges.csv . Emit deltas for multiple relations: . wirelog-cli program.dl --delta reach --delta summary . Pipe delta additions to another tool: . wirelog-cli program.dl --delta reach | grep '^+' | awk '{print $2}' . Delta output format . Each changed tuple is prefixed with + or -: . + relation(val1, val2) - relation(val1, val2) . Unchanged tuples are not emitted. If no changes occurred for a given relation in a step, no output is produced for that relation. ",
-    "url": "/wirelog/reference/delta-queries/#cli-usage",
+    "title": "Using Delta Queries",
+    "content": "Delta queries are available through the embedded C API. The --delta and --watch flags are not supported in the CLI; use wl_session_set_delta_cb() and wl_session_insert_incremental() instead. Delta output format . Each changed tuple is represented as a signed change: . + relation(val1, val2) -- tuple newly derived - relation(val1, val2) -- tuple retracted . Unchanged tuples are not emitted. If no changes occurred for a given relation in a step, no output is produced for that relation. ",
+    "url": "/wirelog/reference/delta-queries/#using-delta-queries",
     
-    "relUrl": "/reference/delta-queries/#cli-usage"
-  },"15": {
+    "relUrl": "/reference/delta-queries/#using-delta-queries"
+  },"24": {
     "doc": "Delta Queries",
     "title": "Example 1: Relationship Tracking (Friend Suggestions)",
-    "content": "This example tracks friend-of-a-friend suggestions. When new friendships are added or removed, only the affected suggestions change. friend-suggestions.dl: .decl friend(x: string, y: string) .decl suggested(x: string, y: string) friend(\"Alice\", \"Bob\"). friend(\"Bob\", \"Carol\"). friend(\"Carol\", \"Dave\"). # Friend-of-a-friend who is not already a direct friend suggested(x, z) :- friend(x, y), friend(y, z), x != z, !friend(x, z).output suggested . Snapshot output (initial evaluation): . suggested(\"Alice\", \"Carol\") suggested(\"Bob\", \"Dave\") . Run with delta mode: . wirelog-cli friend-suggestions.dl --delta suggested . After adding friend(\"Alice\", \"Dave\"). — Alice and Dave now have a mutual friend (Bob and Carol): . + suggested(\"Alice\", \"Dave\") . After removing friend(\"Bob\", \"Carol\"). — Bob no longer bridges Alice to Carol: . - suggested(\"Alice\", \"Carol\") - suggested(\"Alice\", \"Dave\") - suggested(\"Bob\", \"Dave\") . Negation is fully supported in non-recursive delta programs. Retracting a fact that enabled a negated body condition (!friend(x, z)) correctly triggers downstream retractions. ",
+    "content": "This example tracks friend-of-a-friend suggestions. When new friendships are added or removed, only the affected suggestions change. friend-suggestions.dl: .decl friend(x: string, y: string) .decl suggested(x: string, y: string) friend(\"Alice\", \"Bob\"). friend(\"Bob\", \"Carol\"). friend(\"Carol\", \"Dave\"). # Friend-of-a-friend who is not already a direct friend suggested(x, z) :- friend(x, y), friend(y, z), x != z, !friend(x, z).output suggested . Snapshot output (initial evaluation): . suggested(\"Alice\", \"Carol\") suggested(\"Bob\", \"Dave\") . With the embedding API, register a delta callback for suggested before running. After the initial run, insert friend(\"Alice\", \"Dave\") incrementally: . After adding friend(\"Alice\", \"Dave\"). — Alice and Dave now have a mutual friend (Bob and Carol): . + suggested(\"Alice\", \"Dave\") . After removing friend(\"Bob\", \"Carol\"). — Bob no longer bridges Alice to Carol: . - suggested(\"Alice\", \"Carol\") - suggested(\"Alice\", \"Dave\") - suggested(\"Bob\", \"Dave\") . Negation is fully supported in non-recursive delta programs. Retracting a fact that enabled a negated body condition (!friend(x, z)) correctly triggers downstream retractions. ",
     "url": "/wirelog/reference/delta-queries/#example-1-relationship-tracking-friend-suggestions",
     
     "relUrl": "/reference/delta-queries/#example-1-relationship-tracking-friend-suggestions"
-  },"16": {
+  },"25": {
     "doc": "Delta Queries",
     "title": "Example 2: Graph Connectivity Changes",
-    "content": "Track pairs of reachable nodes as edges are added and removed. reachability.dl: .decl edge(x: int32, y: int32) .decl reach(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 4). reach(x, y) :- edge(x, y). reach(x, z) :- reach(x, y), edge(y, z).output reach . reach is recursive. In the MVP, delta output is supported only for non-recursive output relations. To track reachability deltas, add a non-recursive summary relation and apply --delta to it instead (see below). Workaround — snapshot summary relation: .decl edge(x: int32, y: int32) .decl reach(x: int32, y: int32) .decl reach_count(n: int32) # non-recursive summary edge(1, 2). edge(2, 3). edge(3, 4). reach(x, y) :- edge(x, y). reach(x, z) :- reach(x, y), edge(y, z). reach_count(count(x)) :- reach(x, _).output reach_count . wirelog-cli reachability.dl --delta reach_count . Snapshot output: . reach_count(6) . After adding edge(4, 5): . - reach_count(6) + reach_count(10) . After removing edge(2, 3): . - reach_count(10) + reach_count(5) . The delta for an aggregation result is a pair of retractions and insertions — the old value leaves and the new value enters. ",
+    "content": "Track pairs of reachable nodes as edges are added and removed. reachability.dl: .decl edge(x: int32, y: int32) .decl reach(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 4). reach(x, y) :- edge(x, y). reach(x, z) :- reach(x, y), edge(y, z).output reach . reach is recursive. In the MVP, delta output is supported only for non-recursive output relations. To track reachability deltas, add a non-recursive summary relation and register the delta callback on it instead (see below). Workaround — snapshot summary relation: .decl edge(x: int32, y: int32) .decl reach(x: int32, y: int32) .decl reach_count(n: int32) # non-recursive summary edge(1, 2). edge(2, 3). edge(3, 4). reach(x, y) :- edge(x, y). reach(x, z) :- reach(x, y), edge(y, z). reach_count(count(x)) :- reach(x, _).output reach_count . Register a delta callback on reach_count via the embedding API before running. Snapshot output: . reach_count(6) . After adding edge(4, 5): . - reach_count(6) + reach_count(10) . After removing edge(2, 3): . - reach_count(10) + reach_count(5) . The delta for an aggregation result is a pair of retractions and insertions — the old value leaves and the new value enters. ",
     "url": "/wirelog/reference/delta-queries/#example-2-graph-connectivity-changes",
     
     "relUrl": "/reference/delta-queries/#example-2-graph-connectivity-changes"
-  },"17": {
+  },"26": {
     "doc": "Delta Queries",
     "title": "Example 3: Aggregation Changes (Degree Monitoring)",
-    "content": "Monitor the out-degree of nodes as the graph changes. Aggregations produce deltas as pairs: the old aggregate value is retracted and the new value is inserted. degree-monitor.dl: .decl edge(x: int32, y: int32) .decl out_degree(x: int32, deg: int32) .decl high_degree(x: int32) edge(1, 2). edge(1, 3). edge(2, 3). out_degree(x, count(y)) :- edge(x, y). high_degree(x) :- out_degree(x, d), d &gt;= 2.output out_degree .output high_degree . Run with delta tracking on both relations: . wirelog-cli degree-monitor.dl --delta out_degree --delta high_degree . Snapshot output: . out_degree(1, 2) out_degree(2, 1) high_degree(1) . After adding edge(2, 4) (node 2 gains a second neighbor): . - out_degree(2, 1) + out_degree(2, 2) + high_degree(2) . After removing edge(1, 2) (node 1 drops below the threshold): . - out_degree(1, 2) + out_degree(1, 1) - high_degree(1) . Downstream rules that depend on out_degree automatically receive the correct delta, so high_degree updates without any additional program changes. ",
+    "content": "Monitor the out-degree of nodes as the graph changes. Aggregations produce deltas as pairs: the old aggregate value is retracted and the new value is inserted. degree-monitor.dl: .decl edge(x: int32, y: int32) .decl out_degree(x: int32, deg: int32) .decl high_degree(x: int32) edge(1, 2). edge(1, 3). edge(2, 3). out_degree(x, count(y)) :- edge(x, y). high_degree(x) :- out_degree(x, d), d &gt;= 2.output out_degree .output high_degree . Register delta callbacks on out_degree and high_degree via the embedding API before running. Snapshot output: . out_degree(1, 2) out_degree(2, 1) high_degree(1) . After adding edge(2, 4) (node 2 gains a second neighbor): . - out_degree(2, 1) + out_degree(2, 2) + high_degree(2) . After removing edge(1, 2) (node 1 drops below the threshold): . - out_degree(1, 2) + out_degree(1, 1) - high_degree(1) . Downstream rules that depend on out_degree automatically receive the correct delta, so high_degree updates without any additional program changes. ",
     "url": "/wirelog/reference/delta-queries/#example-3-aggregation-changes-degree-monitoring",
     
     "relUrl": "/reference/delta-queries/#example-3-aggregation-changes-degree-monitoring"
-  },"18": {
+  },"27": {
     "doc": "Delta Queries",
     "title": "Example 4: Access Control (Permission Propagation)",
-    "content": "Track effective permissions as role assignments change. access-control.dl: .decl role(user: string, r: string) .decl permission(r: string, action: string) .decl can(user: string, action: string) role(\"alice\", \"editor\"). role(\"bob\", \"viewer\"). permission(\"editor\", \"read\"). permission(\"editor\", \"write\"). permission(\"viewer\", \"read\"). can(u, a) :- role(u, r), permission(r, a).output can . wirelog-cli access-control.dl --delta can . Snapshot output: . can(\"alice\", \"read\") can(\"alice\", \"write\") can(\"bob\", \"read\") . After adding role(\"bob\", \"editor\"): . + can(\"bob\", \"write\") . After removing role(\"alice\", \"editor\"): . - can(\"alice\", \"read\") - can(\"alice\", \"write\") . This pattern is useful for audit logs: the delta stream records exactly which permissions were granted or revoked and when. ",
+    "content": "Track effective permissions as role assignments change. access-control.dl: .decl role(user: string, r: string) .decl permission(r: string, action: string) .decl can(user: string, action: string) role(\"alice\", \"editor\"). role(\"bob\", \"viewer\"). permission(\"editor\", \"read\"). permission(\"editor\", \"write\"). permission(\"viewer\", \"read\"). can(u, a) :- role(u, r), permission(r, a).output can . Register a delta callback on can via the embedding API before running. Snapshot output: . can(\"alice\", \"read\") can(\"alice\", \"write\") can(\"bob\", \"read\") . After adding role(\"bob\", \"editor\"): . + can(\"bob\", \"write\") . After removing role(\"alice\", \"editor\"): . - can(\"alice\", \"read\") - can(\"alice\", \"write\") . This pattern is useful for audit logs: the delta stream records exactly which permissions were granted or revoked and when. ",
     "url": "/wirelog/reference/delta-queries/#example-4-access-control-permission-propagation",
     
     "relUrl": "/reference/delta-queries/#example-4-access-control-permission-propagation"
-  },"19": {
+  },"28": {
     "doc": "Delta Queries",
     "title": "Embedding API",
-    "content": "When embedding wirelog as a library (libwirelog), register a callback to receive delta changes programmatically instead of reading stdout. wl_dd_session_set_delta_cb . typedef void (*wl_delta_cb)( const char *relation, /* relation name (null-terminated) */ const wl_val *tuple, /* array of column values */ int arity, /* number of columns */ int polarity, /* +1 for addition, -1 for deletion */ void *userdata /* opaque pointer passed at registration */ ); int wl_dd_session_set_delta_cb( wl_dd_session *session, /* active session handle */ const char *relation, /* relation to watch (NULL = all) */ wl_delta_cb cb, /* callback function */ void *userdata /* passed through to cb unchanged */ ); . Parameters: . | Parameter | Description | . | session | Active wl_dd_session created by wl_dd_session_create | . | relation | Relation name to monitor; pass NULL to receive deltas for all output relations | . | cb | Callback invoked once per changed tuple per evaluation step | . | userdata | Arbitrary pointer forwarded to every cb invocation | . Return value: 0 on success, non-zero on error (e.g., unknown relation name). Callback parameters: . | Parameter | Type | Description | . | relation | const char * | Name of the relation that changed | . | tuple | const wl_val * | Column values; length is arity | . | arity | int | Number of columns in this relation | . | polarity | int | +1 — tuple added; -1 — tuple retracted | . | userdata | void * | Value passed at registration | . wl_val — Column Value . typedef struct { wl_val_kind kind; /* WL_VAL_INT or WL_VAL_STRING */ union { int64_t i; /* integer value */ const char *s; /* interned string (do not free) */ }; } wl_val; . String pointers are owned by the wirelog symbol table and remain valid for the lifetime of the session. Minimal Embedding Example . #include &lt;wirelog/dd.h&gt; #include &lt;stdio.h&gt; static void on_delta(const char *rel, const wl_val *tuple, int arity, int polarity, void *ud) { printf(\"%s %s(\", polarity &gt; 0 ? \"+\" : \"-\", rel); for (int i = 0; i &lt; arity; i++) { if (i) printf(\", \"); if (tuple[i].kind == WL_VAL_INT) printf(\"%lld\", (long long)tuple[i].i); else printf(\"\\\"%s\\\"\", tuple[i].s); } printf(\")\\n\"); } int main(void) { wl_dd_session *s = wl_dd_session_create(\"program.dl\", /*workers=*/1); wl_dd_session_set_delta_cb(s, \"can\", on_delta, NULL); wl_dd_session_run(s); wl_dd_session_destroy(s); return 0; } . ",
+    "content": "When embedding wirelog as a library (libwirelog), register a callback to receive delta changes programmatically instead of reading stdout. wl_session_set_delta_cb . typedef void (*wl_delta_cb)( const char *relation, /* relation name (null-terminated) */ const wl_val *tuple, /* array of column values */ int arity, /* number of columns */ int polarity, /* +1 for addition, -1 for deletion */ void *userdata /* opaque pointer passed at registration */ ); int wl_session_set_delta_cb( wl_session *session, /* active session handle */ const char *relation, /* relation to watch (NULL = all) */ wl_delta_cb cb, /* callback function */ void *userdata /* passed through to cb unchanged */ ); . Parameters: . | Parameter | Description | . | session | Active wl_session created by wl_session_create | . | relation | Relation name to monitor; pass NULL to receive deltas for all output relations | . | cb | Callback invoked once per changed tuple per evaluation step | . | userdata | Arbitrary pointer forwarded to every cb invocation | . Return value: 0 on success, non-zero on error (e.g., unknown relation name). Callback parameters: . | Parameter | Type | Description | . | relation | const char * | Name of the relation that changed | . | tuple | const wl_val * | Column values; length is arity | . | arity | int | Number of columns in this relation | . | polarity | int | +1 — tuple added; -1 — tuple retracted | . | userdata | void * | Value passed at registration | . wl_val — Column Value . typedef struct { wl_val_kind kind; /* WL_VAL_INT or WL_VAL_STRING */ union { int64_t i; /* integer value */ const char *s; /* interned string (do not free) */ }; } wl_val; . String pointers are owned by the wirelog symbol table and remain valid for the lifetime of the session. Minimal Embedding Example . #include &lt;wirelog/session.h&gt; #include &lt;stdio.h&gt; static void on_delta(const char *rel, const wl_val *tuple, int arity, int polarity, void *ud) { printf(\"%s %s(\", polarity &gt; 0 ? \"+\" : \"-\", rel); for (int i = 0; i &lt; arity; i++) { if (i) printf(\", \"); if (tuple[i].kind == WL_VAL_INT) printf(\"%lld\", (long long)tuple[i].i); else printf(\"\\\"%s\\\"\", tuple[i].s); } printf(\")\\n\"); } int main(void) { wl_session *s = wl_session_create(\"program.dl\", /*workers=*/1); wl_session_set_delta_cb(s, \"can\", on_delta, NULL); wl_session_run(s); wl_session_destroy(s); return 0; } . ",
     "url": "/wirelog/reference/delta-queries/#embedding-api",
     
     "relUrl": "/reference/delta-queries/#embedding-api"
-  },"20": {
+  },"29": {
     "doc": "Delta Queries",
     "title": "Best Practices",
-    "content": "Use non-recursive output relations for delta tracking. Attach --delta to a non-recursive summary or projection relation derived from a recursive base. This avoids the MVP restriction while keeping delta semantics correct. # Recursive base (not delta-tracked directly) reach(x, z) :- reach(x, y), edge(y, z). # Non-recursive projection — safe to track with --delta reachable_from_1(z) :- reach(1, z). Aggregate deltas come in pairs. When an aggregate value changes, wirelog retracts the old value and inserts the new one in the same step. Consumers must handle both the - and + for the same group key. Check polarity before acting. In the embedding API, always branch on polarity before inserting into a downstream store. Applying a retraction as an insertion will corrupt the result. Register callbacks before running. wl_dd_session_set_delta_cb must be called before wl_dd_session_run. Callbacks registered after execution starts will not receive deltas from previous steps. Prefer relation-scoped callbacks over NULL (catch-all). A catch-all callback (relation = NULL) receives deltas for every output relation and can produce unexpected volume for programs with many derived relations. ",
+    "content": "Use non-recursive output relations for delta tracking. Attach --delta to a non-recursive summary or projection relation derived from a recursive base. This avoids the MVP restriction while keeping delta semantics correct. # Recursive base (not delta-tracked directly) reach(x, z) :- reach(x, y), edge(y, z). # Non-recursive projection — safe to track with --delta reachable_from_1(z) :- reach(1, z). Aggregate deltas come in pairs. When an aggregate value changes, wirelog retracts the old value and inserts the new one in the same step. Consumers must handle both the - and + for the same group key. Check polarity before acting. In the embedding API, always branch on polarity before inserting into a downstream store. Applying a retraction as an insertion will corrupt the result. Register callbacks before running. wl_session_set_delta_cb must be called before wl_session_run. Callbacks registered after execution starts will not receive deltas from previous steps. Prefer relation-scoped callbacks over NULL (catch-all). A catch-all callback (relation = NULL) receives deltas for every output relation and can produce unexpected volume for programs with many derived relations. ",
     "url": "/wirelog/reference/delta-queries/#best-practices",
     
     "relUrl": "/reference/delta-queries/#best-practices"
-  },"21": {
+  },"30": {
     "doc": "Delta Queries",
     "title": "Limitations (MVP)",
     "content": "| Limitation | Detail | . | Non-recursive output only | --delta and wl_delta_cb apply to output relations with no recursive self-dependency. Recursive relations must be projected into a non-recursive relation first. | . | Single program per session | A wl_dd_session executes one .dl file. Incremental input changes require the embedding API; the CLI --watch mode re-runs the program on file change. | . | No partial-step inspection | Callbacks fire once per evaluation step, after the fixed point is reached for that step. Mid-step states are not exposed. | . ",
     "url": "/wirelog/reference/delta-queries/#limitations-mvp",
     
     "relUrl": "/reference/delta-queries/#limitations-mvp"
-  },"22": {
+  },"31": {
     "doc": "Examples",
     "title": "Examples",
     "content": "Complete programs demonstrating wirelog features. Each example can be saved as a .dl file and run with wirelog-cli. ",
     "url": "/wirelog/user-guide/examples/",
     
     "relUrl": "/user-guide/examples/"
-  },"23": {
+  },"32": {
     "doc": "Examples",
     "title": "Graph Reachability",
     "content": "Find all nodes reachable from a source node.decl edge(x: int32, y: int32) .decl source(x: int32) .decl reach(x: int32) edge(1, 2). edge(2, 3). edge(3, 4). edge(4, 5). edge(3, 6). source(1). reach(x) :- source(x). reach(y) :- reach(x), edge(x, y). Output: . reach(1) reach(2) reach(3) reach(4) reach(5) reach(6) . ",
     "url": "/wirelog/user-guide/examples/#graph-reachability",
     
     "relUrl": "/user-guide/examples/#graph-reachability"
-  },"24": {
+  },"33": {
     "doc": "Examples",
     "title": "Transitive Closure",
     "content": "Compute all pairs (x, z) where z is reachable from x.decl edge(x: int32, y: int32) .decl tc(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 4). tc(x, y) :- edge(x, y). tc(x, z) :- tc(x, y), edge(y, z). Output: . tc(1, 2) tc(1, 3) tc(1, 4) tc(2, 3) tc(2, 4) tc(3, 4) . ",
     "url": "/wirelog/user-guide/examples/#transitive-closure",
     
     "relUrl": "/user-guide/examples/#transitive-closure"
-  },"25": {
+  },"34": {
     "doc": "Examples",
     "title": "Same Generation (Sibling Graph)",
     "content": "Find pairs of nodes at the same depth from shared parents.decl edge(x: int32, y: int32) .decl sg(x: int32, y: int32) edge(1, 2). edge(1, 3). edge(2, 4). edge(3, 5). sg(x, y) :- edge(p, x), edge(p, y), x != y. sg(x, y) :- edge(a, x), sg(a, b), edge(b, y). Output includes pairs like sg(2, 3) and sg(4, 5). ",
     "url": "/wirelog/user-guide/examples/#same-generation-sibling-graph",
     
     "relUrl": "/user-guide/examples/#same-generation-sibling-graph"
-  },"26": {
+  },"35": {
     "doc": "Examples",
     "title": "Shortest Path",
     "content": "Find shortest distances from node 1 in a weighted graph.decl edge(x: int32, y: int32, w: int32) .decl dist(x: int32, d: int32) edge(1, 2, 5). edge(2, 3, 3). edge(1, 3, 10). edge(3, 4, 2). dist(1, 0). dist(y, min(d + w)) :- dist(x, d), edge(x, y, w). Output: . dist(1, 0) dist(2, 5) dist(3, 8) dist(4, 10) . ",
     "url": "/wirelog/user-guide/examples/#shortest-path",
     
     "relUrl": "/user-guide/examples/#shortest-path"
-  },"27": {
+  },"36": {
     "doc": "Examples",
     "title": "Connected Components",
     "content": "Label each node with the minimum node ID in its connected component.decl edge(x: int32, y: int32) .decl cc(x: int32, c: int32) edge(1, 2). edge(2, 3). edge(4, 5). cc(x, x) :- edge(x, _). cc(x, x) :- edge(_, x). cc(y, min(c)) :- cc(x, c), edge(x, y). Output: . cc(1, 1) cc(2, 1) cc(3, 1) cc(4, 4) cc(5, 4) . ",
     "url": "/wirelog/user-guide/examples/#connected-components",
     
     "relUrl": "/user-guide/examples/#connected-components"
-  },"28": {
+  },"37": {
     "doc": "Examples",
     "title": "Bipartiteness Check",
     "content": "Color a graph with two colors. If any node gets both colors, the graph is not bipartite.decl edge(x: int32, y: int32) .decl blue(x: int32) .decl red(x: int32) .decl not_bipartite(x: int32) edge(1, 2). edge(2, 3). edge(3, 4). blue(1). red(y) :- blue(x), edge(x, y). blue(y) :- red(x), edge(x, y). not_bipartite(x) :- blue(x), red(x). This graph is bipartite (no node is both blue and red). Add edge(1, 3) to create an odd cycle and trigger not_bipartite. ",
     "url": "/wirelog/user-guide/examples/#bipartiteness-check",
     
     "relUrl": "/user-guide/examples/#bipartiteness-check"
-  },"29": {
+  },"38": {
     "doc": "Examples",
     "title": "Pointer Analysis (Andersen’s)",
     "content": "A simplified points-to analysis for programs.decl addressOf(v: int32, o: int32) .decl assign(v1: int32, v2: int32) .decl load(v1: int32, v2: int32) .decl store(v1: int32, v2: int32) .decl pointsTo(v: int32, o: int32) addressOf(1, 100). addressOf(2, 200). assign(3, 1). load(4, 3). store(3, 2). pointsTo(v, o) :- addressOf(v, o). pointsTo(v1, o) :- assign(v1, v2), pointsTo(v2, o). pointsTo(v1, o) :- load(v1, v2), pointsTo(v2, p), pointsTo(p, o). pointsTo(v1, o) :- store(v1, v2), pointsTo(v1, p), pointsTo(v2, o).output pointsTo . ",
     "url": "/wirelog/user-guide/examples/#pointer-analysis-andersens",
     
     "relUrl": "/user-guide/examples/#pointer-analysis-andersens"
-  },"30": {
+  },"39": {
     "doc": "Examples",
     "title": "CSV Input",
     "content": "Load data from external files instead of inline facts. program.dl: .decl edge(x: int32, y: int32) .input edge(filename=\"edges.csv\", delimiter=\",\") .decl tc(x: int32, y: int32) .output tc tc(x, y) :- edge(x, y). tc(x, z) :- tc(x, y), edge(y, z). edges.csv: . 1,2 2,3 3,4 . Run: . wirelog-cli program.dl . ",
     "url": "/wirelog/user-guide/examples/#csv-input",
     
     "relUrl": "/user-guide/examples/#csv-input"
-  },"31": {
+  },"40": {
     "doc": "Examples",
     "title": "Counting and Grouping",
     "content": "Count the number of outgoing edges per node.decl edge(x: int32, y: int32) .decl out_degree(x: int32, c: int32) edge(1, 2). edge(1, 3). edge(1, 4). edge(2, 3). out_degree(x, count(y)) :- edge(x, y). Output: . out_degree(1, 3) out_degree(2, 1) . ",
     "url": "/wirelog/user-guide/examples/#counting-and-grouping",
     
     "relUrl": "/user-guide/examples/#counting-and-grouping"
-  },"32": {
+  },"41": {
     "doc": "Examples",
     "title": "Negation (Sink Detection)",
     "content": "Find nodes with no outgoing edges.decl edge(x: int32, y: int32) .decl node(x: int32) .decl sink(x: int32) edge(1, 2). edge(2, 3). node(x) :- edge(x, _). node(y) :- edge(_, y). sink(x) :- node(x), !edge(x, _). Output: . sink(3) . ",
     "url": "/wirelog/user-guide/examples/#negation-sink-detection",
     
     "relUrl": "/user-guide/examples/#negation-sink-detection"
-  },"33": {
+  },"42": {
     "doc": "Examples",
     "title": "String Data",
     "content": "wirelog handles string values via interning.decl knows(x: string, y: string) .decl chain(x: string, y: string) knows(\"Alice\", \"Bob\"). knows(\"Bob\", \"Carol\"). knows(\"Carol\", \"Dave\"). chain(x, y) :- knows(x, y). chain(x, z) :- chain(x, y), knows(y, z).output chain . Output: . chain(\"Alice\", \"Bob\") chain(\"Alice\", \"Carol\") chain(\"Alice\", \"Dave\") chain(\"Bob\", \"Carol\") chain(\"Bob\", \"Dave\") chain(\"Carol\", \"Dave\") . ",
     "url": "/wirelog/user-guide/examples/#string-data",
     
     "relUrl": "/user-guide/examples/#string-data"
-  },"34": {
+  },"43": {
     "doc": "Examples",
     "title": "Incremental Updates (Delta Queries)",
-    "content": "Delta queries let wirelog track what changed between evaluation steps rather than recomputing everything from scratch. When facts are added or removed, wirelog emits the derived tuples that were newly inserted (+) or retracted (-). For full reference, see Delta Queries. Before/After Example . Consider a reachability program where we add a new edge and want to see only the newly derived facts: . Initial state — edges (1,2), (2,3), (3,4): .decl edge(x: int32, y: int32) .decl reach(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 4). reach(x, y) :- edge(x, y). reach(x, z) :- reach(x, y), edge(y, z).output reach . Output: . reach(1, 2) reach(1, 3) reach(1, 4) reach(2, 3) reach(2, 4) reach(3, 4) . After adding edge(4, 5) — delta output shows only the newly derived tuples: . + reach(1, 5) + reach(2, 5) + reach(3, 5) + reach(4, 5) . After removing edge(2, 3) — delta output shows the retracted tuples: . - reach(1, 3) - reach(1, 4) - reach(2, 3) - reach(2, 4) . Interpreting Delta Output . | Prefix | Meaning | . | + | Tuple was newly derived in this step | . | - | Tuple was retracted (no longer holds) | . | (none) | Fact was already present and unchanged | . CLI Commands for Delta Tracking . Run a program and emit delta output for a relation: . wirelog-cli program.dl --delta reach . Watch a live data source and stream deltas as facts change: . wirelog-cli program.dl --delta reach --watch edges.csv . Pipe delta output to another tool: . wirelog-cli program.dl --delta reach | grep '^+' | awk '{print $2}' . See Delta Queries for the full directive syntax and advanced incremental computation patterns. ",
+    "content": "Delta queries let wirelog track what changed between evaluation steps rather than recomputing everything from scratch. When facts are added or removed, wirelog emits the derived tuples that were newly inserted (+) or retracted (-). For full reference, see Delta Queries. Degree Monitoring . Monitor the out-degree of nodes as the graph changes. Aggregations produce deltas as pairs: the old aggregate value is retracted and the new value is inserted. degree-monitor.dl: .decl edge(x: int32, y: int32) .decl out_degree(x: int32, deg: int32) .decl high_degree(x: int32) edge(1, 2). edge(1, 3). edge(2, 3). out_degree(x, count(y)) :- edge(x, y). high_degree(x) :- out_degree(x, d), d &gt;= 2.output out_degree .output high_degree . Snapshot output (initial evaluation): . out_degree(1, 2) out_degree(2, 1) high_degree(1) . After adding edge(2, 4) (node 2 gains a second neighbor): . - out_degree(2, 1) + out_degree(2, 2) + high_degree(2) . After removing edge(1, 2) (node 1 drops below the threshold): . - out_degree(1, 2) + out_degree(1, 1) - high_degree(1) . Downstream rules that depend on out_degree automatically receive the correct delta, so high_degree updates without any additional program changes. Interpreting Delta Output . | Prefix | Meaning | . | + | Tuple was newly derived in this step | . | - | Tuple was retracted (no longer holds) | . Delta tracking is available through the embedded C API (wl_session_set_delta_cb()). See Delta Queries for the full embedding API and advanced incremental computation patterns. ",
     "url": "/wirelog/user-guide/examples/#incremental-updates-delta-queries",
     
     "relUrl": "/user-guide/examples/#incremental-updates-delta-queries"
-  },"35": {
+  },"44": {
     "doc": "User Guide",
     "title": "User Guide",
-    "content": "This section contains guides on how to use the wirelog-cli runner, and comprehensive code examples to help you understand what’s possible in wirelog. | Examples: Advanced demonstration of rule logic | CLI Usage: Using the CLI runner to execute Datalog files | . ",
+    "content": "This section contains guides on how to use the wirelog-cli runner, and comprehensive code examples to help you understand what’s possible in wirelog. | Examples: Advanced demonstration of rule logic | CLI Usage: Using the CLI runner to execute Datalog files | Access Control Auditing: Real-time RBAC auditing with delta queries and the embedding API | . ",
     "url": "/wirelog/user-guide/",
     
     "relUrl": "/user-guide/"
-  },"36": {
+  },"45": {
     "doc": "Getting Started",
     "title": "Getting Started",
     "content": "Welcome to wirelog! This section will guide you through installing the application and writing your first Datalog programs. | Installation Guide: Platform-specific build and installation instructions | Tutorial: Step-by-step introduction to writing Datalog rules | . ",
     "url": "/wirelog/getting-started/",
     
     "relUrl": "/getting-started/"
-  },"37": {
+  },"46": {
     "doc": "Reference",
     "title": "Reference",
     "content": "Comprehensive documentation for wirelog Datalog. | Language Reference: Grammar, types, built-in operators, and pragmatic directives | Delta Queries: Incremental change tracking — additions and retractions on derived relations | . ",
     "url": "/wirelog/reference/",
     
     "relUrl": "/reference/"
-  },"38": {
+  },"47": {
     "doc": "Home",
     "title": "wirelog",
-    "content": "Embedded-to-Enterprise Datalog Engine . wirelog is a C11-based Datalog engine designed for embedded-to-enterprise deployments. The compiler frontend (parser, optimizer, plan generator) is written in C11, and the current execution backend uses Differential Dataflow (Rust) via FFI. A future release will add a pure C11 execution backend using nanoarrow, enabling lightweight embedded deployments without external dependencies. wirelog supports recursive queries, stratified negation, aggregation, and CSV data loading. ",
+    "content": "Embedded-to-Enterprise Datalog Engine . wirelog is a pure C11 Datalog engine designed for embedded-to-enterprise deployments. The compiler frontend (parser, optimizer, plan generator) and the execution backend (columnar storage with Apache Arrow via nanoarrow) are both implemented in C11, with no external dependencies. wirelog supports recursive queries, stratified negation, aggregation, and CSV data loading. ",
     "url": "/wirelog/#wirelog",
     
     "relUrl": "/#wirelog"
-  },"39": {
+  },"48": {
     "doc": "Home",
     "title": "What is wirelog?",
-    "content": "wirelog is a declarative logic programming engine that evaluates Datalog. It is built to bridge the gap between resource-constrained embedded environments and high-performance enterprise data processing. By separating the compilation frontend from the execution backend, wirelog can parse and optimize Datalog rules locally in a lightweight C11 core, while delegating the heavy lifting of execution to specialized backends like Differential Dataflow or Apache Arrow. Why Datalog? . Datalog is a declarative logic programming language that is highly expressive for data queries and analysis. Unlike imperative languages or SQL, Datalog naturally supports recursion, making it exceptionally well-suited for querying graphs, trees, and complex hierarchical relationships without writing complex loops or self-joins. Core Philosophy . | Embedded First: The core compiler is written in pure C11, making it trivial to embed wirelog into C/C++ applications or compile it to WebAssembly for the browser. | Pluggable Backends: You construct your Datalog rules once, and wirelog targets the best execution engine for your environment, whether that’s a locally vectorized backend or a distributed streaming engine. | Advanced Features: Beyond standard Datalog, wirelog natively supports recursive queries, stratified negation to reason about the absence of paths or data, and powerful aggregations. | . ",
+    "content": "wirelog is a declarative logic programming engine that evaluates Datalog. It is built to bridge the gap between resource-constrained embedded environments and high-performance enterprise data processing. wirelog parses, optimizes, and executes Datalog rules entirely within its C11 core, using a columnar Arrow-based execution engine that is efficient enough for both embedded devices and high-throughput enterprise pipelines. Why Datalog? . Datalog is a declarative logic programming language that is highly expressive for data queries and analysis. Unlike imperative languages or SQL, Datalog naturally supports recursion, making it exceptionally well-suited for querying graphs, trees, and complex hierarchical relationships without writing complex loops or self-joins. Core Philosophy . | Embedded First: wirelog is written in pure C11 with no external dependencies, making it trivial to embed into C/C++ applications or compile to WebAssembly for the browser. | Columnar Execution: The execution backend uses Apache Arrow columnar storage (via nanoarrow), giving wirelog high throughput on modern hardware without leaving the C11 ecosystem. | Advanced Features: Beyond standard Datalog, wirelog natively supports recursive queries, stratified negation to reason about the absence of paths or data, and powerful aggregations. | . ",
     "url": "/wirelog/#what-is-wirelog",
     
     "relUrl": "/#what-is-wirelog"
-  },"40": {
+  },"49": {
     "doc": "Home",
     "title": "Documentation",
     "content": "| Document | Description | . | Tutorial | Step-by-step guide from first program to advanced features | . | Language Reference | Grammar, types, operators, directives | . | Examples | Learning-oriented example programs | . | CLI Usage | Command-line interface reference | . ",
     "url": "/wirelog/#documentation",
     
     "relUrl": "/#documentation"
-  },"41": {
+  },"50": {
     "doc": "Home",
     "title": "Links",
     "content": ". | GitHub Repository | Architecture (developer reference) | Contributing | . ",
     "url": "/wirelog/#links",
     
     "relUrl": "/#links"
-  },"42": {
+  },"51": {
     "doc": "Home",
     "title": "Home",
     "content": " ",
     "url": "/wirelog/",
     
     "relUrl": "/"
-  },"43": {
+  },"52": {
     "doc": "Installation",
     "title": "Build and Install Guide",
-    "content": "wirelog is designed to be lightweight and portable, but building the current version requires a few standard tools as it binds a C11 frontend to a Rust execution backend. ",
+    "content": "wirelog is designed to be lightweight and portable. Building requires only standard C tooling — no external runtimes or language toolchains. ",
     "url": "/wirelog/getting-started/install/#build-and-install-guide",
     
     "relUrl": "/getting-started/install/#build-and-install-guide"
-  },"44": {
+  },"53": {
     "doc": "Installation",
     "title": "Prerequisites",
-    "content": "Before building wirelog, you need the following tools installed on your system: . | C11 Compiler: gcc or clang | Rust Toolchain: cargo and rustc | Build System: meson (&gt;= 0.60.0) and ninja | . Depending on your operating system, follow the specific commands below. Ubuntu / Debian . # Update package list sudo apt-get update # Install build tools sudo apt-get install -y build-essential python3-pip ninja-build # Install Meson via pip (to get a recent version) pip3 install --user meson # Install Rust toolchain curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh . macOS . Using Homebrew: . # Install Meson, Ninja brew install meson ninja # Install Rust toolchain curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh . Note: macOS typically comes with clang pre-installed via Xcode Command Line Tools. If not, run xcode-select --install. Windows . The easiest way to build on Windows is using MSYS2 or the Windows Subsystem for Linux (WSL). WSL (Ubuntu) . Follow the Ubuntu / Debian instructions inside your WSL terminal. MSYS2 (MinGW64) . Open the MSYS2 MinGW 64-bit terminal: . # Install GCC, Ninja, and Python pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja python3-pip # Install Meson pip3 install meson # Install Rust toolchain (choose the x86_64-pc-windows-gnu toolchain) curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh . ",
+    "content": "Before building wirelog, you need the following tools installed on your system: . | C11 Compiler: gcc or clang | Build System: meson (&gt;= 0.60.0) and ninja | . Depending on your operating system, follow the specific commands below. Ubuntu / Debian . # Update package list sudo apt-get update # Install build tools sudo apt-get install -y build-essential python3-pip ninja-build # Install Meson via pip (to get a recent version) pip3 install --user meson . macOS . Using Homebrew: . # Install Meson, Ninja brew install meson ninja . Note: macOS typically comes with clang pre-installed via Xcode Command Line Tools. If not, run xcode-select --install. Windows . The easiest way to build on Windows is using MSYS2 or the Windows Subsystem for Linux (WSL). WSL (Ubuntu) . Follow the Ubuntu / Debian instructions inside your WSL terminal. MSYS2 (MinGW64) . Open the MSYS2 MinGW 64-bit terminal: . # Install GCC, Ninja, and Python pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja python3-pip # Install Meson pip3 install meson . ",
     "url": "/wirelog/getting-started/install/#prerequisites",
     
     "relUrl": "/getting-started/install/#prerequisites"
-  },"45": {
+  },"54": {
     "doc": "Installation",
     "title": "Building",
-    "content": "Once your prerequisites are satisfied, building wirelog is straightforward. Clone the repository and initialize the Meson build directory: . # Clone the repository git clone https://github.com/justinjoy/wirelog.git cd wirelog # Setup the build directory with the Differential Dataflow backend enabled meson setup builddir -Ddd=true # Compile the project meson compile -C builddir . ",
+    "content": "Once your prerequisites are satisfied, building wirelog is straightforward. Clone the repository and initialize the Meson build directory: . # Clone the repository git clone https://github.com/justinjoy/wirelog.git cd wirelog # Setup the build directory meson setup builddir # Compile the project meson compile -C builddir . ",
     "url": "/wirelog/getting-started/install/#building",
     
     "relUrl": "/getting-started/install/#building"
-  },"46": {
+  },"55": {
     "doc": "Installation",
     "title": "Running wirelog",
     "content": "After a successful build, the wirelog-cli binary will be located in the builddir folder. You can run a Datalog program by passing the file to the CLI: ./builddir/wirelog-cli your_program.dl . For more details on CLI options, see the CLI Usage. ",
     "url": "/wirelog/getting-started/install/#running-wirelog",
     
     "relUrl": "/getting-started/install/#running-wirelog"
-  },"47": {
+  },"56": {
     "doc": "Installation",
     "title": "Installation",
     "content": " ",
     "url": "/wirelog/getting-started/install/",
     
     "relUrl": "/getting-started/install/"
-  },"48": {
+  },"57": {
     "doc": "Language Reference",
     "title": "Language Reference",
     "content": "Complete reference for the wirelog Datalog language. ",
     "url": "/wirelog/reference/language/",
     
     "relUrl": "/reference/language/"
-  },"49": {
+  },"58": {
     "doc": "Language Reference",
     "title": "Program Structure",
     "content": "A program consists of declarations, directives, facts, and rules in any order. program = (declaration | directive | rule | fact)* . ",
     "url": "/wirelog/reference/language/#program-structure",
     
     "relUrl": "/reference/language/#program-structure"
-  },"50": {
+  },"59": {
     "doc": "Language Reference",
     "title": "Comments",
     "content": "# Hash comment (to end of line) // Slash comment (to end of line) . ",
     "url": "/wirelog/reference/language/#comments",
     
     "relUrl": "/reference/language/#comments"
-  },"51": {
+  },"60": {
     "doc": "Language Reference",
     "title": "Identifiers",
     "content": "Identifiers start with a letter or underscore, followed by letters, digits, or underscores. Case-sensitive. [a-zA-Z_][a-zA-Z0-9_]* . Examples: edge, tc, pointsTo, _temp, Arc . ",
     "url": "/wirelog/reference/language/#identifiers",
     
     "relUrl": "/reference/language/#identifiers"
-  },"52": {
+  },"61": {
     "doc": "Language Reference",
     "title": "Literals",
     "content": "| Type | Syntax | Examples | . | Integer | [0-9]+ | 0, 42, 1000000 | . | String | \"...\" | \"file.csv\", \"Alice\" | . | Boolean | True, False |   | . | Wildcard | _ | matches any value | . All values are stored internally as 64-bit integers. Strings are interned (deduplicated via a symbol table). ",
     "url": "/wirelog/reference/language/#literals",
     
     "relUrl": "/reference/language/#literals"
-  },"53": {
+  },"62": {
     "doc": "Language Reference",
     "title": "Types",
     "content": "Used in .decl declarations: . | Type | Description | . | int32 | 32-bit signed integer | . | int64 | 64-bit signed integer | . | string | UTF-8 text (interned) | . ",
     "url": "/wirelog/reference/language/#types",
     
     "relUrl": "/reference/language/#types"
-  },"54": {
+  },"63": {
     "doc": "Language Reference",
     "title": "Facts",
     "content": "Ground atoms with constant arguments, terminated by a period. relation(const1, const2, ...). Examples: . edge(1, 2). name(1, \"Alice\"). source(1). ",
     "url": "/wirelog/reference/language/#facts",
     
     "relUrl": "/reference/language/#facts"
-  },"55": {
+  },"64": {
     "doc": "Language Reference",
     "title": "Rules",
     "content": "A head atom derived from body predicates, separated by :-. head(args) :- pred1(args), pred2(args), ... Body predicates are comma-separated (logical AND). Shared variables across predicates form implicit joins. tc(x, z) :- tc(x, y), edge(y, z). ",
     "url": "/wirelog/reference/language/#rules",
     
     "relUrl": "/reference/language/#rules"
-  },"56": {
+  },"65": {
     "doc": "Language Reference",
     "title": "Operators",
     "content": "Arithmetic . | Operator | Meaning | Precedence | . | * | Multiplication | 2 (highest) | . | / | Division | 2 | . | % | Modulo | 2 | . | + | Addition | 1 | . | - | Subtraction | 1 | . All operators are left-associative. Parentheses are not supported in arithmetic expressions – use intermediate rules instead. Comparison . | Operator | Meaning | . | = | Equal | . | != | Not equal | . | &lt; | Less than | . | &gt; | Greater than | . | &lt;= | Less than or equal | . | &gt;= | Greater than or equal | . Used as body predicates: . big(x, y) :- edge(x, y), x &gt; 10. diff(x, y) :- data(x, y), x != y. ",
     "url": "/wirelog/reference/language/#operators",
     
     "relUrl": "/reference/language/#operators"
-  },"57": {
+  },"66": {
     "doc": "Language Reference",
     "title": "Negation",
     "content": "Prefix ! on a body predicate. sink(x) :- node(x), !edge(x, _). Constraints: . | Variables in negated atoms must be bound by positive atoms in the same rule | Negation must be stratifiable (no recursive dependency through negation) | . ",
     "url": "/wirelog/reference/language/#negation",
     
     "relUrl": "/reference/language/#negation"
-  },"58": {
+  },"67": {
     "doc": "Language Reference",
     "title": "Aggregation",
     "content": "Aggregate functions in head arguments. Grouping is implicit over non-aggregate head variables. | Function | Meaning | . | count(expr) | Count occurrences | . | sum(expr) | Sum of values | . | min(expr) | Minimum value | . | max(expr) | Maximum value | . Functions are case-insensitive (count = COUNT). cnt(x, count(y)) :- data(x, y). shortest(x, min(d + w)) :- dist(x, d), edge(x, y, w). ",
     "url": "/wirelog/reference/language/#aggregation",
     
     "relUrl": "/reference/language/#aggregation"
-  },"59": {
+  },"68": {
     "doc": "Language Reference",
     "title": "Directives",
     "content": ".decl – Declare Relation .decl name(attr1: type1, attr2: type2, ...) . Example: .decl edge(x: int32, y: int32) .decl label(id: int32, name: string) .input – Load CSV Data . Must follow a .decl for the same relation.input name(filename=\"path.csv\", delimiter=\",\") . Parameters: . | Parameter | Description | Default | . | filename | CSV file path (relative to cwd) | required | . | delimiter | Field separator | , | . | IO | I/O mode | \"file\" | . CSV format: one tuple per line, fields separated by delimiter, empty lines skipped.output – Filter Output .output name . If any .output directive exists, only marked relations are printed. Without .output, all derived relations are printed.printsize – Print Cardinality .printsize name .plan – Optimizer Hint . Appended after a rule to signal the optimizer: . path(x, z) :- edge(x, y), path(y, z).plan . ",
     "url": "/wirelog/reference/language/#directives",
     
     "relUrl": "/reference/language/#directives"
-  },"60": {
+  },"69": {
     "doc": "Language Reference",
     "title": "Execution Model",
-    "content": ". | Parse – Datalog source to AST | Optimize – Fusion, JPP (join reordering), SIP (semijoin pre-filtering) | Stratify – Tarjan’s SCC algorithm, topological ordering | Translate – IR to Differential Dataflow operator graph | Execute – Fixed-point iteration per stratum | Output – Print result tuples | . Stratification . Rules are partitioned into strata based on dependencies: . | Stratum 0 executes first | Negation and aggregation require the depended-on relation to be in a lower stratum | Mutually recursive relations are in the same stratum and computed via fixed-point iteration | . Fixed-Point Semantics . Recursive strata are evaluated incrementally: new facts derived in each iteration are added until no new facts appear. The result is the least fixed point of the program. ",
+    "content": ". | Parse – Datalog source to AST | Optimize – Fusion, JPP (join reordering), SIP (semijoin pre-filtering) | Stratify – Tarjan’s SCC algorithm, topological ordering | Translate – IR to columnar execution plan | Execute – Fixed-point iteration per stratum | Output – Print result tuples | . Stratification . Rules are partitioned into strata based on dependencies: . | Stratum 0 executes first | Negation and aggregation require the depended-on relation to be in a lower stratum | Mutually recursive relations are in the same stratum and computed via fixed-point iteration | . Fixed-Point Semantics . Recursive strata are evaluated incrementally: new facts derived in each iteration are added until no new facts appear. The result is the least fixed point of the program. ",
     "url": "/wirelog/reference/language/#execution-model",
     
     "relUrl": "/reference/language/#execution-model"
-  },"61": {
+  },"70": {
     "doc": "Language Reference",
     "title": "Lexical Tokens",
     "content": "| Token | Pattern | . | IDENT | [a-zA-Z_][a-zA-Z0-9_]* | . | INTEGER | [0-9]+ | . | STRING | \"...\" | . | HORN | :- | . | BANG | ! | . | DOT | . | . | COMMA | , | . | LPAREN / RPAREN | ( / ) | . | COLON | : | . | EQ / NEQ | = / != | . | LT / GT | &lt; / &gt; | . | LTE / GTE | &lt;= / &gt;= | . | PLUS / MINUS | + / - | . | STAR / SLASH / PERCENT | * / / / % | . ",
     "url": "/wirelog/reference/language/#lexical-tokens",
     
     "relUrl": "/reference/language/#lexical-tokens"
-  },"62": {
+  },"71": {
     "doc": "License",
     "title": "License",
     "content": "wirelog is available under a dual licensing model: . ",
     "url": "/wirelog/license/",
     
     "relUrl": "/license/"
-  },"63": {
+  },"72": {
     "doc": "License",
     "title": "Open Source License: LGPL-3.0",
     "content": "wirelog core is licensed under the GNU Lesser General Public License v3.0 (LGPL-3.0). What you can do: . | ✅ Use wirelog in your projects (commercial or open source) | ✅ Modify the source code | ✅ Distribute modified versions | ✅ Include wirelog in proprietary applications | . What you must do: . | 📋 Include a copy of the LGPL-3.0 license | 📋 State significant changes to wirelog | 📋 Disclose the source code of wirelog modifications | 📋 Include copyright notices | . Limitations: . | ⚠️ No warranty or liability | . For the complete LGPL-3.0 license text, see: LICENSE.md . ",
     "url": "/wirelog/license/#open-source-license-lgpl-30",
     
     "relUrl": "/license/#open-source-license-lgpl-30"
-  },"64": {
+  },"73": {
     "doc": "License",
     "title": "Commercial License",
     "content": "For organizations that require: . | ✨ Proprietary licensing without LGPL obligations | ✨ Commercial support and SLA agreements | ✨ Custom development and integration | ✨ License redistribution rights | . Contact Information . CleverPlant Commercial Licensing: . | Email: inquiry@cleverplant.com | Website: https://cleverplant.com | GitHub Issues: wirelog/issues | . Please include in your inquiry: . | Your organization name | Use case and deployment scale | Required features and customizations | Timeline for deployment | . ",
     "url": "/wirelog/license/#commercial-license",
     
     "relUrl": "/license/#commercial-license"
-  },"65": {
+  },"74": {
     "doc": "License",
     "title": "License Comparison",
     "content": "| Feature | LGPL-3.0 | Commercial | . | Use in Projects | ✅ Free | ✅ Licensed | . | Modifications | ✅ Required to share | ✅ Private modifications | . | Source Code Disclosure | ✅ Required | ❌ Not required | . | Support | ❌ Community | ✅ Professional SLA | . | Custom Development | ❌ Not included | ✅ Available | . | Commercial Support | ❌ No | ✅ Yes | . ",
     "url": "/wirelog/license/#license-comparison",
     
     "relUrl": "/license/#license-comparison"
-  },"66": {
+  },"75": {
     "doc": "License",
     "title": "Contributing",
     "content": "By contributing to wirelog, you agree that: . | Your contributions are licensed under LGPL-3.0 | CleverPlant may use your contributions in commercial licenses | You retain copyright to your contributions | . See CONTRIBUTING.md for details. ",
     "url": "/wirelog/license/#contributing",
     
     "relUrl": "/license/#contributing"
-  },"67": {
+  },"76": {
     "doc": "License",
     "title": "Questions?",
     "content": ". | LGPL-3.0 questions: See gnu.org/licenses/lgpl-3.0 | Commercial licensing: inquiry@cleverplant.com | General questions: GitHub Discussions | . ",
     "url": "/wirelog/license/#questions",
     
     "relUrl": "/license/#questions"
-  },"68": {
+  },"77": {
     "doc": "Tutorial",
     "title": "Tutorial",
     "content": "This guide walks you through wirelog from your first Datalog program to recursion, negation, and aggregation. ",
     "url": "/wirelog/getting-started/tutorial/",
     
     "relUrl": "/getting-started/tutorial/"
-  },"69": {
+  },"78": {
     "doc": "Tutorial",
     "title": "1. Facts and Rules",
     "content": "A Datalog program consists of declarations, facts (ground data), and rules (logical derivations). Every relation must be declared with .decl before use.decl edge(x: int32, y: int32) .decl result(x: int32, y: int32) # Facts: edges in a graph edge(1, 2). edge(2, 3). # Rule: copy facts into a result relation result(x, y) :- edge(x, y). Save this as first.dl and run: . wirelog-cli first.dl . Output: . result(1, 2) result(2, 3) . Facts state what is true. Rules derive new facts from existing ones. The :- symbol reads as “if” – result(x, y) holds if edge(x, y) holds. ",
     "url": "/wirelog/getting-started/tutorial/#1-facts-and-rules",
     
     "relUrl": "/getting-started/tutorial/#1-facts-and-rules"
-  },"70": {
+  },"79": {
     "doc": "Tutorial",
     "title": "2. Joins",
     "content": "When multiple predicates share a variable, wirelog joins them on that variable.decl parent(x: int32, y: int32) .decl name(x: int32, n: string) .decl child_name(n: string) parent(1, 2). parent(2, 3). name(1, \"Alice\"). name(2, \"Bob\"). name(3, \"Carol\"). # Join parent and name on shared variable p child_name(n) :- parent(p, c), name(c, n). Output: . child_name(\"Bob\") child_name(\"Carol\") . The shared variable c forces wirelog to match parent(p, c) with name(c, n) where the second column of parent equals the first column of name. ",
     "url": "/wirelog/getting-started/tutorial/#2-joins",
     
     "relUrl": "/getting-started/tutorial/#2-joins"
-  },"71": {
+  },"80": {
     "doc": "Tutorial",
     "title": "3. Filters",
     "content": "Comparison operators filter results.decl edge(x: int32, y: int32) .decl backward(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 1). # Only edges where source &gt; target backward(x, y) :- edge(x, y), x &gt; y. Output: . backward(3, 1) . Available operators: =, !=, &lt;, &gt;, &lt;=, &gt;=. ",
     "url": "/wirelog/getting-started/tutorial/#3-filters",
     
     "relUrl": "/getting-started/tutorial/#3-filters"
-  },"72": {
+  },"81": {
     "doc": "Tutorial",
     "title": "4. Recursion",
     "content": "Datalog’s power comes from recursive rules. This computes transitive closure – all paths in a graph: .decl edge(x: int32, y: int32) .decl tc(x: int32, y: int32) edge(1, 2). edge(2, 3). edge(3, 4). # Base case: direct edges are paths tc(x, y) :- edge(x, y). # Recursive case: extend paths by one edge tc(x, z) :- tc(x, y), edge(y, z). Output: . tc(1, 2) tc(1, 3) tc(1, 4) tc(2, 3) tc(2, 4) tc(3, 4) . wirelog automatically computes the fixed point – it keeps applying rules until no new facts are derived. ",
     "url": "/wirelog/getting-started/tutorial/#4-recursion",
     
     "relUrl": "/getting-started/tutorial/#4-recursion"
-  },"73": {
+  },"82": {
     "doc": "Tutorial",
     "title": "5. Negation",
     "content": "Use ! to negate a predicate. This finds nodes with no outgoing edges: .decl edge(x: int32, y: int32) .decl node(x: int32) .decl sink(x: int32) edge(1, 2). edge(2, 3). node(x) :- edge(x, _). node(y) :- edge(_, y). # Nodes that are NOT a source of any edge sink(x) :- node(x), !edge(x, _). Output: . sink(3) . Important: Variables in negated predicates must be bound by other (positive) predicates in the same rule. This program is invalid: . # INVALID: y is only bound in the negated predicate bad(x) :- node(x), !edge(x, y). Negation is stratified – a relation cannot recursively depend on its own negation. ",
     "url": "/wirelog/getting-started/tutorial/#5-negation",
     
     "relUrl": "/getting-started/tutorial/#5-negation"
-  },"74": {
+  },"83": {
     "doc": "Tutorial",
-    "title": "6. Aggregation",
+    "title": "6. Delta Queries",
+    "content": "Datalog programs often process changing data. In embedded systems, network policies, or access gateways, you may need to react to incremental updates — new users added to roles, new edges in a graph, new rules applied. Rather than recomputing from scratch, delta queries track only what changed. Friend Suggestion Example . Consider a social graph where you want to suggest friends-of-friends who are not already direct friends: .decl person(x: string) .decl friend(x: string, y: string) .decl suggested(x: string, y: string) person(\"Alice\"). person(\"Bob\"). person(\"Carol\"). person(\"Dave\"). friend(\"Alice\", \"Bob\"). friend(\"Bob\", \"Carol\"). friend(\"Carol\", \"Dave\"). # Friend-of-a-friend who is not already a direct friend suggested(x, z) :- friend(x, y), friend(y, z), x != z, !friend(x, z).output suggested . Save as friends.dl and run normally for the full result set: . wirelog-cli friends.dl . Output: . suggested(\"Alice\", \"Carol\") suggested(\"Bob\", \"Dave\") . To see only what changed when facts are added or removed, use the --delta flag (embedding API): . wirelog-cli friends.dl --delta suggested . After adding friend(\"Alice\", \"Dave\"), the delta output shows only the newly derived tuple: . + suggested(\"Alice\", \"Dave\") . After removing friend(\"Bob\", \"Carol\"), the delta shows the retracted tuples: . - suggested(\"Alice\", \"Carol\") - suggested(\"Alice\", \"Dave\") - suggested(\"Bob\", \"Dave\") . Note: The --delta flag outputs changed tuples only. Output relations must be declared with the .output directive. The --delta and --watch flags are available through the embedded C API (wl_session_insert_incremental(), wl_session_set_delta_cb()); see Delta Queries Reference for embedding API, performance tuning, and more examples. ",
+    "url": "/wirelog/getting-started/tutorial/#6-delta-queries",
+    
+    "relUrl": "/getting-started/tutorial/#6-delta-queries"
+  },"84": {
+    "doc": "Tutorial",
+    "title": "7. Aggregation",
     "content": "Aggregate functions compute summary values: count, sum, min, max. Count .decl data(x: int32, y: int32) .decl cnt(x: int32, c: int32) data(1, 10). data(1, 20). data(1, 30). data(2, 40). # Count values per key cnt(x, count(y)) :- data(x, y). Output: . cnt(1, 3) cnt(2, 1) . Min (Shortest Path) .decl edge(x: int32, y: int32, w: int32) .decl dist(x: int32, d: int32) edge(1, 2, 5). edge(2, 3, 3). edge(1, 3, 10). dist(1, 0). dist(y, min(d + w)) :- dist(x, d), edge(x, y, w). Output: . dist(1, 0) dist(2, 5) dist(3, 8) . Node 3 gets distance 8 (via 1→2→3: 5+3) rather than 10 (direct 1→3) because min selects the smallest value. ",
-    "url": "/wirelog/getting-started/tutorial/#6-aggregation",
+    "url": "/wirelog/getting-started/tutorial/#7-aggregation",
     
-    "relUrl": "/getting-started/tutorial/#6-aggregation"
-  },"75": {
+    "relUrl": "/getting-started/tutorial/#7-aggregation"
+  },"85": {
     "doc": "Tutorial",
-    "title": "7. CSV Input",
+    "title": "8. CSV Input",
     "content": "For larger datasets, load data from CSV files using the .input directive.decl edge(x: int32, y: int32) .input edge(filename=\"edges.csv\", delimiter=\",\") .decl tc(x: int32, y: int32) .output tc tc(x, y) :- edge(x, y). tc(x, z) :- tc(x, y), edge(y, z). Create edges.csv: . 1,2 2,3 3,4 . Run: . wirelog-cli program.dl . The .output tc directive means only tc results are printed. Without .output, all derived relations are printed. Supported Types . | Type | Description | . | int32 | 32-bit signed integer | . | int64 | 64-bit signed integer | . | string | Text (interned internally) | . ",
-    "url": "/wirelog/getting-started/tutorial/#7-csv-input",
+    "url": "/wirelog/getting-started/tutorial/#8-csv-input",
     
-    "relUrl": "/getting-started/tutorial/#7-csv-input"
-  },"76": {
+    "relUrl": "/getting-started/tutorial/#8-csv-input"
+  },"86": {
     "doc": "Tutorial",
-    "title": "8. String Values",
+    "title": "9. String Values",
     "content": "wirelog supports string values via interning: .decl edge(x: string, y: string) .decl tc(x: string, y: string) edge(\"Alice\", \"Bob\"). edge(\"Bob\", \"Carol\"). tc(x, y) :- edge(x, y). tc(x, z) :- tc(x, y), edge(y, z). Output: . tc(\"Alice\", \"Bob\") tc(\"Alice\", \"Carol\") tc(\"Bob\", \"Carol\") . ",
-    "url": "/wirelog/getting-started/tutorial/#8-string-values",
+    "url": "/wirelog/getting-started/tutorial/#9-string-values",
     
-    "relUrl": "/getting-started/tutorial/#8-string-values"
-  },"77": {
+    "relUrl": "/getting-started/tutorial/#9-string-values"
+  },"87": {
     "doc": "Tutorial",
     "title": "9. Wildcards",
     "content": "Use _ to ignore a column: .decl edge(x: int32, y: int32, w: int32) .decl has_edge(x: int32, y: int32) edge(1, 2, 100). edge(2, 3, 200). # Ignore the weight column has_edge(x, y) :- edge(x, y, _). Each _ is independent – edge(_, _) matches any edge regardless of source or target. ",
     "url": "/wirelog/getting-started/tutorial/#9-wildcards",
     
     "relUrl": "/getting-started/tutorial/#9-wildcards"
-  },"78": {
+  },"88": {
     "doc": "Tutorial",
     "title": "10. Multi-Worker Execution",
-    "content": "For large datasets, use multiple workers for parallel execution: . wirelog-cli --workers 4 program.dl . The --workers flag sets the number of Differential Dataflow worker threads. Results are identical regardless of worker count. ",
+    "content": "For large datasets, use multiple workers for parallel execution: . wirelog-cli --workers 4 program.dl . The --workers flag sets the number of execution worker threads for the columnar backend. Results are identical regardless of worker count. ",
     "url": "/wirelog/getting-started/tutorial/#10-multi-worker-execution",
     
     "relUrl": "/getting-started/tutorial/#10-multi-worker-execution"
-  },"79": {
+  },"89": {
     "doc": "Tutorial",
     "title": "Next Steps",
     "content": ". | Language Reference – complete grammar and operator details | Examples – more programs to learn from | CLI Usage – all command-line options | . ",
